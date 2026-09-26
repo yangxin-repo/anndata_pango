@@ -6,4 +6,4 @@ from .anndata_pango import load_10x_h5_pango
 from .anndata_pango import Pango_Accessor
 
 def main() -> None:
-    print("Hello from anndata-pango!")
+    print("Hello from anndata_pango!")

@@ -261,6 +261,18 @@ class Image_Pango:
 
         return label_matrix
 
+    def add_labels_to_coordinate_mapping(self,
+                                         mapping_key:str,
+                                         label_df:pd.DataFrame,
+                                         by:str):
+
+        self.coordinate.coordinate_mapping[mapping_key] = self.coordinate.coordinate_mapping[mapping_key].merge(label_df,
+                                                                                                                on=by,
+                                                                                                                how="left")
+
+        return None
+
+
     def show_labels(self,
                     mapping_key:str,
                     mask_label:str):
@@ -282,6 +294,11 @@ class Image_Pango:
         plt.show()
 
         return None
+
+    def get_mapping_coordinate(self,
+                               mapping_key:str):
+
+        return self.coordinate.coordinate_mapping[mapping_key].copy()
 
     def write_h5(self):
 
