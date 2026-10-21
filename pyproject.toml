@@ -7,7 +7,21 @@ authors = [
     { name = "Yangxin-Zhang", email = "910858193@qq.com" }
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "anndata==0.13.4",
+    "csbdeep==0.8.2",
+    "matplotlib==3.11.2",
+    "numpy==2.5.4",
+    "pandas==3.0.6",
+    "Pillow==13.0.0",
+    "platformdirs==4.13.5",
+    "playwright==1.64.0",
+    "Requests==2.34.2",
+    "scanpy==1.12.4",
+    "scipy==1.18.1",
+    "stardist==0.9.2",
+    "tqdm==4.70.1",
+]
 
 [project.scripts]
 anndata-pango = "anndata_pango:main"

@@ -88,7 +88,7 @@ class Pango_Accessor:
         return None
 
     def get_stardist_labels(self,
-                            model_path:str):
+                            model_path:str=None):
         
         # resize the source image to adapt the stardist model
         self._adata.uns["source_image"].resize_source_image(microns_per_pixel=0.3)
@@ -103,12 +103,15 @@ class Pango_Accessor:
         self._adata.uns["source_image"].expand_mask_labels(mask_label="stardist_label")
 
         # resample the label to barcode
+        self._adata.uns["source_image"].resample_mask_labels(mask_label="stardist_label",
+                                                             mapping_key="barcode_registration")
         self._adata.uns["source_image"].resample_mask_labels(mask_label="stardist_label_expanded",
                                                              mapping_key="barcode_registration")
 
         # write the label to obs
         self._adata.obs = self._adata.obs.join(self._adata.uns["source_image"]
-                                               .get_mapping_coordinate(mapping_key="stardist_label_expanded"))
+                                               .get_mapping_coordinate(mapping_key="barcode_registration")
+                                               .set_index("barcode"))
 
         return None
 
@@ -118,7 +121,7 @@ class Pango_Accessor:
         
         # transform the label to category
         self._adata.obs[label] = (np.char.add(f"{label}_",
-                                             self._adata.obs["stardist_label"].astype(str).to_xarray()))
+                                             self._adata.obs[label].astype(str).to_xarray()))
         
         except_labels = [f"{label}_{lab}" for lab in except_labels]
 
@@ -174,12 +177,15 @@ class Pango_Accessor:
 
     def plot_labels_with_source_image(self,
                                       mapping_key:str,
-                                      mask_label:str):
+                                      mask_label:str,
+                                      mask_label_expanded:str=None):
 
         self._adata.uns["source_image"].show_labels(mapping_key=mapping_key,
-                                                    mask_label=mask_label)
+                                                    mask_label=mask_label,
+                                                    mask_label_expanded=mask_label_expanded)
 
         return None
+
 
 def load_10x_h5_pango(h5_path: str):
     # load expression matrix from 10x_h5

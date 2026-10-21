@@ -8,6 +8,7 @@ from scipy.sparse import csr_matrix
 from PIL import Image
 from skimage import segmentation
 from scipy import ndimage
+from PIL import Image
 
 from . import coordinate_system_pango as csp
 
@@ -55,17 +56,24 @@ class Image_Pango:
         return None
 
     def fit_stardist_models(self,
-                            model_path:str,
+                            model_path:str=None,
                             model_name:str = "2D_versatile_he"):
-
         # load the model
-        model = stardist.models.StarDist2D(None,
-                                           name=model_name,
-                                           basedir=model_path)
+        if model_path is not None:
+            model = stardist.models.StarDist2D(None,
+                                               name=model_name,
+                                               basedir=model_path)
+        else:
+            model = stardist.models.StarDist2D.from_pretrained(model_name)
 
         # fit the model
-        labs, details = model.predict_instances(self.pixel_matrix,
-                                                n_tiles=(8, 8, 1))
+        labs, _ = model.predict_instances_big(self.pixel_matrix,
+                                              axes='YXC',
+                                              block_size=2048,
+                                              min_overlap=128,
+                                              context=96,
+                                              show_progress=True)
+
         
         self.mask_matrix["stardist_label"] = csr_matrix(labs)
 
@@ -200,7 +208,7 @@ class Image_Pango:
 
         self.mask_matrix[f"{mask_label}_expanded"] = csr_matrix(segmentation.expand_labels(label_image=(self.mask_matrix[mask_label]
                                                                                                         .toarray()),
-                                                                                           distance=3))
+                                                                                           distance=20))
 
         return None
 
@@ -215,6 +223,19 @@ class Image_Pango:
                                                                                                              .T),
                                                                                               order=0,
                                                                                               cval=0)
+
+        # resample the label to a continuous label
+        resampled = self.coordinate.coordinate_mapping[mapping_key][mask_label].astype(int)
+        unique_labels = np.unique(resampled)
+        unique_labels = unique_labels[unique_labels != 0]
+
+        # create a lookup table to map the unique labels to a continuous range
+        lut = np.zeros(unique_labels.max() + 1, dtype=resampled.dtype)
+        lut[unique_labels] = np.arange(1, len(unique_labels) + 1, dtype=resampled.dtype)
+        resampled = lut[resampled]
+
+        # update the resampled label to the coordinate mapping
+        self.coordinate.coordinate_mapping[mapping_key][mask_label] = resampled
 
         return None
 
@@ -275,33 +296,94 @@ class Image_Pango:
 
     def show_labels(self,
                     mapping_key:str,
-                    mask_label:str):
-
-        # shut off show automatically
-        plt.ioff()
-
-        # build the plot panel
-        fig, ax = plt.subplots()
-        ax.axis("off")
-
+                    mask_label:str,
+                    mask_label_expanded:str=None,
+                    save_image:bool=False):
+        
         # rebuild the label matrix
-        label_mat = self.rebuild_label_matrix(mapping_key=mapping_key, label=mask_label)
+        label_mat = self.rebuild_label_matrix(mapping_key=mapping_key, 
+                                              label=mask_label)
 
-        # show image
-        ax.imshow(self.resample_source_image(mapping_key=mapping_key), interpolation="nearest")
-        ax.imshow(np.ma.masked_where(label_mat == 0, label_mat), interpolation="nearest", cmap="tab20", alpha=0.5)
+        # extract the expanded label matrix
+        if mask_label_expanded is not None:
+            label_mat_expanded = self.rebuild_label_matrix(mapping_key=mapping_key, 
+                                                           label=mask_label_expanded)
+        else:
+            label_mat_expanded = None
 
-        plt.show()
+        # generate the label image
+        label_image = mask_labels_to_random_color_png(mask_labels=label_mat,
+                                                      expanded_mask_labels=label_mat_expanded,)
+        # show the label image
+        label_image.show()
 
-        return None
+        if save_image:
+            return label_image
+        else:
+            return None
 
     def get_mapping_coordinate(self,
                                mapping_key:str):
 
         return self.coordinate.coordinate_mapping[mapping_key].copy()
 
-    def write_h5(self):
+    def get_mask_label_plot(self,
+                            background_plot:bool=False):
 
-        return None
+        rgb_img = mask_labels_to_random_color_png(mask_labels=self.mask_matrix["stardist_label"].toarray(), 
+                                                  image_background=self.source_image,
+                                                  background_plot=background_plot)
+
+        return rgb_img
+
+def mask_labels_to_random_color_png(mask_labels,
+                                    expanded_mask_labels=None, 
+                                    image_background:Image=None,
+                                    background_plot:bool=False,
+                                    alpha:float=0.5,
+                                    alpha_expanded:float=0.2,
+                                    seed:int=2026):
+    
+    num_labels = int(mask_labels.max()) + 1 
+
+    # generate random colors for each label
+    rng = np.random.default_rng(seed)
+    colors = rng.integers(0, 256, size=(num_labels, 3), dtype=np.uint8)
+    colors[0] = [0, 0, 0]
+
+    # extract the expanded mask labels
+    if expanded_mask_labels is not None:
+        rgb = colors[expanded_mask_labels].astype(np.float32)
+
+        original_mask = mask_labels > 0
+        expanded_only_mask = (expanded_mask_labels > 0) & (~original_mask)
+
+        alpha_map = np.zeros(mask_labels.shape, dtype=np.float32)
+        alpha_map[original_mask] = alpha
+        alpha_map[expanded_only_mask] = alpha_expanded
+        alpha_map = alpha_map[..., None]
+    else:
+        rgb = colors[mask_labels].astype(np.float32)
+        original_mask = mask_labels > 0
+
+        alpha_map = np.zeros(mask_labels.shape, dtype=np.float32)
+        alpha_map[original_mask] = alpha
+        alpha_map = alpha_map[..., None]
 
 
+    # generate gery scale background image
+    if background_plot and image_background is not None:
+        gray_bkg = np.array(image_background.convert('L'))
+        gray_bkg = np.stack([gray_bkg] * 3, axis=-1).astype(np.float32)
+
+        rgb = gray_bkg * (1 - alpha_map) + rgb * alpha_map
+        rgb = np.clip(rgb, 0, 255)
+    else:
+        bg = np.array((0, 0, 0), dtype=np.float32)
+        rgb = bg * (1 - alpha_map) + rgb * alpha_map
+        rgb = np.clip(rgb, 0, 255)
+
+    # create an RGB image from the mask labels
+    rgb_img = Image.fromarray(rgb.astype(np.uint8), mode='RGB')
+
+    return rgb_img
