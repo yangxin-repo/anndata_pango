@@ -42,14 +42,18 @@ class Image_Pango:
         return None
 
     def load_pixel_matrix(self,
-                          normalize=True):
+                          normalize:bool=True,
+                          platform:str="10x"):
 
         # load the pixel matrix as array
         pxl_mat = np.asarray(self.source_image)
 
         # normalize the pixel matrix
         if normalize:
-            pxl_mat = csbdeep.utils.normalize(pxl_mat, 1, 99.8, axis=(0, 1))
+            if platform == "10x":
+                pxl_mat = csbdeep.utils.normalize(pxl_mat, 1, 99.8, axis=(0, 1))
+            if platform == "stereo":
+                pxl_mat = csbdeep.utils.normalize(pxl_mat, 1, 99.8)
 
         self.pixel_matrix = pxl_mat
 
@@ -57,7 +61,14 @@ class Image_Pango:
 
     def fit_stardist_models(self,
                             model_path:str=None,
-                            model_name:str = "2D_versatile_he"):
+                            model_name:str = "2D_versatile_he",
+                            platform:str = "10x"):
+
+        # verify the platform
+        if platform == "10x":
+            axes = "YXC"
+        if platform == "stereo":
+            axes = "YX"
         # load the model
         if model_path is not None:
             model = stardist.models.StarDist2D(None,
@@ -68,7 +79,7 @@ class Image_Pango:
 
         # fit the model
         labs, _ = model.predict_instances_big(self.pixel_matrix,
-                                              axes='YXC',
+                                              axes=axes,
                                               block_size=2048,
                                               min_overlap=128,
                                               context=96,

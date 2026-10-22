@@ -44,33 +44,53 @@ class Pango_Accessor:
         return None
 
     def load_source_image(self,
-                          tissue_position_path:str,
                           image_path:str,
                           microns_per_pxl:float,
+                          tissue_position_path:str=None,
                           scalefactor:float=1,
                           array_row:str="array_row",
                           array_col:str="array_col",
                           pxl_row:str = "pxl_row_in_fullres",
-                          pxl_col:str = "pxl_col_in_fullres"):
+                          pxl_col:str = "pxl_col_in_fullres",
+                          platform:str = "10x"):
 
-        # load the tissue position information
-        ti_po_df = pd.read_parquet(tissue_position_path)
-        ti_po_df["pxl_row"] = ti_po_df[pxl_row]
-        ti_po_df["pxl_col"] = ti_po_df[pxl_col]
-        ti_po_df["array_row"] = ti_po_df[array_row]
-        ti_po_df["array_col"] = ti_po_df[array_col]
+        if platform == "10x" and tissue_position_path is not None:
 
-        # create the Image_Pango class
-        self._adata.uns["source_image"] = Image_Pango(image_path=image_path,
-                                                      microns_per_pxl=microns_per_pxl)
+            # load the tissue position information
+            ti_po_df = pd.read_parquet(tissue_position_path)
+            ti_po_df["pxl_row"] = ti_po_df[pxl_row]
+            ti_po_df["pxl_col"] = ti_po_df[pxl_col]
+            ti_po_df["array_row"] = ti_po_df[array_row]
+            ti_po_df["array_col"] = ti_po_df[array_col]
 
-        # add the registration information
-        self._adata.uns["source_image"].add_coordinate_mapping(coordinate_mapping=ti_po_df[["barcode","array_row","array_col","pxl_row","pxl_col"]],
-                                                               scalefactor=scalefactor,
-                                                               mapping_key="barcode_registration")
+            # create the Image_Pango class
+            self._adata.uns["source_image"] = Image_Pango(image_path=image_path,
+                                                          microns_per_pxl=microns_per_pxl)
 
-        # extract the tissue part
-        self._adata.uns["source_image"].extract_mapping_area(mapping_key="barcode_registration")
+            # add the registration information
+            self._adata.uns["source_image"].add_coordinate_mapping(coordinate_mapping=ti_po_df[["barcode","array_row","array_col","pxl_row","pxl_col"]],
+                                                                   scalefactor=scalefactor,
+                                                                   mapping_key="barcode_registration")
+
+            # extract the tissue part
+            self._adata.uns["source_image"].extract_mapping_area(mapping_key="barcode_registration")
+
+        if platform == "stereo":
+
+            # load the tissue position information
+            ti_po_df = self._adata.obs[["x","y"]].copy()
+            ti_po_df["barcode"] = self._adata.obs_names.to_numpy()
+            ti_po_df[["array_row","array_col"]] = ti_po_df[["x","y"]].copy()
+            ti_po_df[["pxl_row","pxl_col"]] = ti_po_df[["x","y"]].copy()
+            
+            # create the Image_Pango class
+            self._adata.uns["source_image"] = Image_Pango(image_path=image_path,
+                                                          microns_per_pxl=microns_per_pxl)
+
+            # add the registration information
+            self._adata.uns["source_image"].add_coordinate_mapping(coordinate_mapping=ti_po_df[["barcode","array_row","array_col","pxl_row","pxl_col"]],
+                                                                   scalefactor=scalefactor,
+                                                                   mapping_key="barcode_registration")
 
         return None
 
@@ -88,16 +108,24 @@ class Pango_Accessor:
         return None
 
     def get_stardist_labels(self,
-                            model_path:str=None):
+                            model_path:str=None,
+                            microns_per_pixel:float=0.3,
+                            platform:str="10x",
+                            model_name:str = "2D_versatile_he",
+                            resize_source_image:bool=True):
         
         # resize the source image to adapt the stardist model
-        self._adata.uns["source_image"].resize_source_image(microns_per_pixel=0.3)
+        if resize_source_image:
+            self._adata.uns["source_image"].resize_source_image(microns_per_pixel=microns_per_pixel)
 
         # load pixel matrix
-        self._adata.uns["source_image"].load_pixel_matrix(normalize=True)
+        self._adata.uns["source_image"].load_pixel_matrix(normalize=True,
+                                                          platform=platform)
 
         # fit the model
-        self._adata.uns["source_image"].fit_stardist_models(model_path=model_path)
+        self._adata.uns["source_image"].fit_stardist_models(model_path=model_path,
+                                                            platform=platform,
+                                                            model_name=model_name)
 
         # expand the label to 3 pixel surrounding
         self._adata.uns["source_image"].expand_mask_labels(mask_label="stardist_label")
