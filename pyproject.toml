@@ -9,19 +9,23 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "anndata",
-    "csbdeep",
-    "matplotlib==3.11.2",
-    "numpy==2.5.4",
-    "pandas==3.0.6",
-    "Pillow==13.0.0",
-    "platformdirs==4.13.5",
-    "playwright==1.64.0",
-    "Requests==2.34.2",
-    "scanpy==1.12.4",
-    "scipy==1.18.1",
-    "stardist==0.9.2",
-    "tqdm==4.70.1",
-    "scvi-tools"
+    "numpy",
+    "pandas",
+    "Pillow",
+    "scanpy",
+    "scipy",
+    "stardist",
+    "scvi-tools",
+    "h5py",
+    "requests",
+    "playwright",
+    "skimage",
+    "spatialleiden",
+    "squidpy",
+    "uuid",
+    "cell_type_mapper",
+    "tempfile",
+    "shutil"
 ]
 
 [project.scripts]

@@ -3,11 +3,18 @@ import anndata as ad
 import pandas as pd
 import numpy as np
 import scanpy as sc
+import uuid
+import os
+import squidpy as sq
+import spatialleiden as sl
 import scvi
 import warnings
+import tempfile
+import shutil
 from scipy.sparse import csr_matrix
 from anndata import AnnData
 from scvi.external import SysVI
+from cell_type_mapper.cli.from_specified_markers import FromSpecifiedMarkersRunner
 
 from .utils_anndata_pango import (transform_dataframe_dtype)
 from .image_pango.image_pango import Image_Pango
@@ -247,17 +254,19 @@ class Pango_Accessor:
     def fit_scvi_models(self,
                         batch_key:str="batch",
                         categorical_covariate_keys:list=None,
-                        continuous_covariate_keys:list=None):
+                        continuous_covariate_keys:list=None,
+                        highly_variable_genes:bool=False):
         
         # set the random seed for reproducibility
         scvi.settings.seed = 2026
 
         # select the HCGs
-        scvi.data.poisson_gene_selection(self._adata,
-                                         n_top_genes=4000,
-                                         batch_key=batch_key,
-                                         subset=True,
-                                         layer="counts")
+        if highly_variable_genes:
+            scvi.data.poisson_gene_selection(self._adata,
+                                             n_top_genes=4000,
+                                             batch_key=batch_key,
+                                             subset=True,
+                                             layer="counts")
 
         # register adata to scvi
         self._adata.X = self._adata.layers["counts"].copy()
@@ -288,17 +297,21 @@ class Pango_Accessor:
     def fit_sysVI_models(self,
                         batch_key:str="batch",
                         categorical_covariate_keys:list=None,
-                        continuous_covariate_keys:list=None):
+                        continuous_covariate_keys:list=None,
+                        highly_variable_genes:bool=False):
 
         # set the random seed for reproducibility
         scvi.settings.seed = 2026
 
-        # select the HCGs
+        # confirm the log1p
         self._adata.X = self._adata.layers["log1p"].copy()
-        sc.pp.highly_variable_genes(self._adata,
-                                    n_top_genes=4000,
-                                    batch_key=batch_key,
-                                    subset=True)
+
+        # select the HCGs
+        if highly_variable_genes:
+            sc.pp.highly_variable_genes(self._adata,
+                                        n_top_genes=4000,
+                                        batch_key=batch_key,
+                                        subset=True)
 
         # register adata to sysVI
         SysVI.setup_anndata(self._adata,
@@ -322,7 +335,7 @@ class Pango_Accessor:
     def build_graph_related_space(self,
                                   use_rep:str="X_scvi",
                                   n_neighbors:int=30,
-                                  n_pcs:int=50):
+                                  n_pcs:int=None):
 
         # build the neighbor graph
         sc.pp.neighbors(self._adata,
@@ -334,16 +347,95 @@ class Pango_Accessor:
         sc.tl.umap(self._adata, 
                    min_dist=0.8)
         sc.tl.tsne(self._adata, 
-                   use_rep="X_scvi")
+                   use_rep=use_rep)
 
         # build the leiden clustering
         sc.tl.leiden(self._adata, 
-                     resolution=1, 
+                     resolution=0.5, 
                      key_added="leiden", 
                      flavor="igraph",
                      n_iterations=-1)
 
+        return None
+
+    def conduct_spatial_cluster(self,
+                                rank_method:str="wilcoxon",
+                                max_iter:int=None):
+
+        if rank_method=="logreg" and max_iter is None:
+            max_iter = 100
+
+        self._adata.X = self._adata.layers["counts"].copy()
+        sc.pp.filter_cells(self._adata,
+                           min_counts=1,
+                           inplace=True)
+        sc.pp.filter_genes(self._adata,
+                           min_cells=1,
+                           inplace=True)
+        sc.experimental.pp.highly_variable_genes(
+            self._adata,
+            flavor='pearson_residuals',
+            n_top_genes=2000)
+
+        adata_hvg = self._adata[:,self._adata.var["highly_variable"]].copy()
+
+        sc.pp.filter_cells(adata_hvg,
+                           min_counts=1,
+                           inplace=True)
+        sc.pp.filter_genes(adata_hvg,
+                           min_cells=1,
+                           inplace=True)
+
+        sc.experimental.pp.normalize_pearson_residuals(adata_hvg,
+                                                       inplace=True)
+
+        sc.pp.pca(adata_hvg, 
+                  n_comps=50,
+                  random_state=42)
+
+        self._adata._inplace_subset_obs(self._adata.obs_names.isin(adata_hvg.obs_names))
+        self._adata.obsm["X_pca"] = (pd.DataFrame(adata_hvg.obsm["X_pca"],
+                                                  index=adata_hvg.obs_names)
+                                     .reindex(self._adata.obs_names)
+                                     .values)
         
+        sc.pp.neighbors(self._adata,
+                        random_state=42,
+                        n_neighbors=20,
+                        use_rep="X_pca",
+                        n_pcs=50) 
+        
+        sq.gr.spatial_neighbors_knn(self._adata,
+                                    n_neighs = 20)
+
+        sl.spatialleiden(self._adata, 
+                         layer_ratio=0.5,
+                         n_iterations=-1,
+                         random_state=42,
+                         latent_neighbors_key="connectivities",
+                         spatial_neighbors_key="spatial_connectivities",
+                         key_added="spatialleiden")
+
+        self._adata.X = self._adata.layers["counts"].copy()
+        sc.pp.normalize_total(self._adata, 
+                              target_sum=1e4)
+        sc.pp.log1p(self._adata)
+        self._adata.layers["log1p"] = self._adata.X.copy()
+
+        sc.tl.rank_genes_groups(self._adata, 
+                                groupby='spatialleiden', 
+                                method=rank_method,
+                                max_iter=max_iter)
+        return None
+
+    def map_cell_type(self,
+                      query_markers:str,
+                      precomputed_stats:str):
+
+        map_cell_type_pango(adata=self._adata,
+                            query_markers=query_markers,
+                            precomputed_stats=precomputed_stats)
+
         return None
 
 
@@ -366,7 +458,8 @@ def load_10x_h5_pango(h5_path: str):
 def concat_pango(adata_list:list,
                  batch_key:list,
                  save_var:list=None,
-                 normalize:bool=False) -> AnnData:
+                 normalize:bool=False,
+                 highly_variable_genes:bool=False) -> AnnData:
 
     # get the save var colnumns
     ad_num = len(adata_list)
@@ -396,6 +489,13 @@ def concat_pango(adata_list:list,
             sc.pp.log1p(ad_obj)
             ad_obj.layers["log1p"] = ad_obj.X.copy()
 
+    # select the HCGs
+    if  highly_variable_genes:
+        for ad_obj in adata_list:
+            ad_obj.X = ad_obj.layers["log1p"]
+            sc.pp.highly_variable_genes(ad_obj,
+                                        n_top_genes=6000,
+                                        subset=True)
     # concat adata list
     adata_comb = ad.concat(adata_list,
                            join="inner",
@@ -405,3 +505,88 @@ def concat_pango(adata_list:list,
                            index_unique="_")
 
     return adata_comb
+
+def get_the_rank_genes_pango(adata:AnnData,
+                             rank_group:str="spatialleiden",
+                             pval_cutoff:float=0.05,
+                             log2fc_min:float=1,
+                             gene_num:int=500):
+
+    # get the total gene set of meaningful rank genes
+    all_sig = set()
+    for grp in adata.obs[rank_group].unique().astype(str):
+        df = (sc.get.rank_genes_groups_df(adata,
+                                         group=grp, 
+                                         pval_cutoff=pval_cutoff, 
+                                         log2fc_min=log2fc_min)
+                                         .sort_values('scores', ascending=False))
+
+        df = df[df["scores"]>0]
+
+        if df.shape[0] < gene_num:
+            all_sig.update(df['names'])
+        else:
+            all_sig.update(df.loc[:gene_num,"names"])
+
+    gene_list = list(all_sig)
+
+    return gene_list
+
+def map_cell_type_pango(adata:AnnData,
+                        query_markers:str,
+                        precomputed_stats:str,
+                        output_dir:str=None):
+
+    # verify the output directionary
+    if output_dir is None:
+        output_dir = tempfile.mkdtemp(prefix="map_cell_type_")
+        clear_tmp = True
+    else:
+        clear_tmp = False
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # generate the tmp file
+    tmp_path_h5ad = os.path.join(output_dir, f"{uuid.uuid4().hex}.h5ad")
+
+    tmp_path_csv = os.path.join(output_dir, f"{uuid.uuid4().hex}.csv")
+
+    tmp_path_json = os.path.join(output_dir, f"{uuid.uuid4().hex}.json")
+
+    # pre-address the adata
+    adata.X = adata.layers["counts"]
+    adata.pango.save(save_path=tmp_path_h5ad)
+
+    # the configuration for map_cell_type
+    config = {
+        "query_path": tmp_path_h5ad,
+        "extended_result_path": tmp_path_json,
+        "csv_result_path": tmp_path_csv,
+        "drop_level": "CCN20230722_SUPT",
+        "cloud_safe": False,
+        "query_markers": {
+            "serialized_lookup": query_markers
+            },
+        "precomputed_stats": {
+            "path": precomputed_stats
+            },
+        "type_assignment": {
+            "normalization": "raw",
+            "n_processors": 2
+            }
+    }
+
+    # run the map cell type process
+    runner = FromSpecifiedMarkersRunner(args=[], input_data=config)
+    runner.run()
+
+    # add the cell type to adata
+    adata.obs = adata.obs.join(pd.read_csv(tmp_path_csv,
+                                           comment='#')
+                                           .set_index("cell_id"))
+
+    # clear the output directionary
+    if clear_tmp:
+        shutil.rmtree("/path/to/dir")
+
+    return None
