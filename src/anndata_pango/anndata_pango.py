@@ -1,23 +1,23 @@
 
-import anndata as ad
-import pandas as pd
-import numpy as np
-import scanpy as sc
-import uuid
-import os
-import squidpy as sq
-import spatialleiden as sl
-import scvi
 import warnings
-import tempfile
-import shutil
-from scipy.sparse import csr_matrix
-from anndata import AnnData
-from scvi.external import SysVI
-from cell_type_mapper.cli.from_specified_markers import FromSpecifiedMarkersRunner
+from typing import Literal
 
-from .utils_anndata_pango import (transform_dataframe_dtype)
+import anndata as ad
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import scvi
+import spatialleiden as sl
+import squidpy as sq
+from scipy.sparse import csr_matrix
+from scvi.external import SysVI
+
 from .image_pango.image_pango import Image_Pango
+from .utils_anndata_pango import (
+    convert_gene_symbols_to_ensembl_ids_pango,
+    map_cell_type_pango,
+    transform_dataframe_dtype,
+)
 
 # scvi settings
 scvi.settings.dl_num_workers = 2
@@ -32,7 +32,8 @@ class Pango_Accessor:
         self._adata = adata
 
     # save the adata obj
-    def save(self,save_path: str):
+    def save(self,
+             save_path: str) -> None:
 
         # load the whole adata to memory
         adata = self._adata.to_memory()
@@ -60,54 +61,129 @@ class Pango_Accessor:
     def load_source_image(self,
                           image_path:str,
                           microns_per_pxl:float,
-                          tissue_position_path:str=None,
+                          tissue_position_path:str|None = None,
+                          array_col:str|None = None,
+                          array_row:str|None = None,
+                          pxl_row:str|None = None,
+                          pxl_col:str|None = None,
+                          barcode:str|None = None,
                           scalefactor:float=1,
-                          array_row:str="array_row",
-                          array_col:str="array_col",
-                          pxl_row:str = "pxl_row_in_fullres",
-                          pxl_col:str = "pxl_col_in_fullres",
-                          platform:str = "10x"):
+                          platform:Literal["10x","stereo"]="10x") -> None:
 
-        if platform == "10x" and tissue_position_path is not None:
+        if platform == "10x":
 
-            # load the tissue position information
-            ti_po_df = pd.read_parquet(tissue_position_path)
-            ti_po_df["pxl_row"] = ti_po_df[pxl_row]
-            ti_po_df["pxl_col"] = ti_po_df[pxl_col]
-            ti_po_df["array_row"] = ti_po_df[array_row]
-            ti_po_df["array_col"] = ti_po_df[array_col]
-            ti_po_df.index = ti_po_df["barcode"]
+            if  tissue_position_path is None:
+                raise ValueError("Please provide the tissue_position_path for 10x platform.")
+            else:
+                # verify array_row,array_col,pxl_row,pxl_col
+                if array_row is None:
+                    array_row = ["array_row"]
+                else:
+                    array_row = [array_row]
+                    
+                if array_col is None:
+                    array_col = ["array_col"]
+                else:
+                    array_col = [array_col]
+                    
+                if pxl_row is None:
+                    pxl_row = ["pxl_row_in_fullres"]
+                else:
+                    pxl_row = [pxl_row]
+                if pxl_col is None:
+                    pxl_col = ["pxl_col_in_fullres"]
+                else:
+                    pxl_col = [pxl_col] 
+                    
+                if barcode is None:
+                    barcode = ["barcode"]
+                else:
+                    barcode = [barcode]
+                    
+                # load the tissue position information
+                try:
+                    ti_po_df = pd.read_parquet(tissue_position_path)
+                    ti_po_df["pxl_row"] = (ti_po_df[pxl_row]
+                                           .to_numpy()
+                                           .astype(np.float32))
+                    ti_po_df["pxl_col"] = (ti_po_df[pxl_col]
+                                           .to_numpy()
+                                           .astype(np.float32))
+                    ti_po_df["array_row"] = (ti_po_df[array_row]
+                                             .to_numpy()
+                                             .astype(np.float32))
+                    ti_po_df["array_col"] = (ti_po_df[array_col]
+                                             .to_numpy()
+                                             .astype(np.float32))
+                    ti_po_df.index = (ti_po_df[barcode]
+                                      .to_numpy()
+                                      .astype(str))
+                except Exception as exc:
+                    raise ValueError("Columns not found in tissue position dataframe for 10x platform.") from exc
 
-            # write spatial to obsm
-            self._adata.obsm["spatial"] = (pd.DataFrame(index=self._adata.obs_names)
-                                           .join(ti_po_df[["array_col","array_row"]])
-                                           .to_numpy())
+                # write spatial to obsm
+                self._adata.obsm["spatial"] = (pd.DataFrame(index=self._adata.obs_names)
+                                               .join(ti_po_df[["array_col","array_row"]])
+                                               .to_numpy()
+                                               .astype(np.float32))
 
-            # create the Image_Pango class
-            self._adata.uns["source_image"] = Image_Pango(image_path=image_path,
-                                                          microns_per_pxl=microns_per_pxl)
+                # create the Image_Pango class
+                self._adata.uns["source_image"] = Image_Pango(image_path=image_path,
+                                                              microns_per_pxl=microns_per_pxl)
 
-            # add the registration information
-            self._adata.uns["source_image"].add_coordinate_mapping(coordinate_mapping=ti_po_df[["barcode","array_row","array_col","pxl_row","pxl_col"]],
-                                                                   scalefactor=scalefactor,
-                                                                   mapping_key="barcode_registration")
+                # add the registration information
+                self._adata.uns["source_image"].add_coordinate_mapping(coordinate_mapping=ti_po_df[["barcode","array_row","array_col","pxl_row","pxl_col"]],
+                                                                       scalefactor=scalefactor,
+                                                                       mapping_key="barcode_registration")
 
-            # extract the tissue part
-            self._adata.uns["source_image"].extract_mapping_area(mapping_key="barcode_registration")
+                # extract the tissue part
+                self._adata.uns["source_image"].extract_mapping_area(mapping_key="barcode_registration")
 
         if platform == "stereo":
 
+            # verify array_row,array_col,pxl_row,pxl_col
+            if array_row is None:
+                array_row = ["x"]
+            else:
+                array_row = [array_row]
+                
+            if array_col is None:
+                array_col = ["y"]
+            else:
+                array_col = [array_col]
+                
+            if pxl_row is None:
+                pxl_row = ["x"]
+            else:
+                pxl_row = [pxl_row] 
+                
+            if pxl_col is None:
+                pxl_col = ["y"]
+            else:
+                pxl_col = [pxl_col]
+                
+            if barcode is None:
+                barcode = ["barcode"]
+            else:
+                barcode = [barcode]
+                
             # load the tissue position information
-            ti_po_df = self._adata.obs[["x","y"]].copy()
-            ti_po_df["barcode"] = self._adata.obs_names.to_numpy()
-            ti_po_df[["array_row","array_col"]] = ti_po_df[["x","y"]].copy()
-            ti_po_df[["pxl_row","pxl_col"]] = ti_po_df[["x","y"]].copy()
-            ti_po_df.index = ti_po_df["barcode"]
+            try:
+                ti_po_df = self._adata.obs.copy()
+                ti_po_df["barcode"] = self._adata.obs_names.to_numpy()
+                ti_po_df[["array_row","array_col"]] = ti_po_df[array_row+array_col].copy()
+                ti_po_df[["pxl_row","pxl_col"]] = ti_po_df[pxl_row+pxl_col].copy()
+                ti_po_df.index = (ti_po_df["barcode"]
+                                  .to_numpy()
+                                  .astype(str))
+            except Exception as exc:
+                raise ValueError("Columns not found in adata.obs for stereo platform.") from exc
 
             # write spatial to obsm
             self._adata.obsm["spatial"] = (pd.DataFrame(index=self._adata.obs_names)
                                            .join(ti_po_df[["array_col","array_row"]])
-                                           .to_numpy())
+                                           .to_numpy()
+                                           .astype(np.float32))
             
             # create the Image_Pango class
             self._adata.uns["source_image"] = Image_Pango(image_path=image_path,
@@ -120,29 +196,33 @@ class Pango_Accessor:
 
         return None
 
-    def load_tissue_position(self,
-                             tissue_position_path:str):
+    # def load_tissue_position(self,
+    #                          tissue_position_path:str) -> None:
 
-        # load the tissue position dataframe
-        ti_po_df = pd.read_parquet(tissue_position_path).set_index("barcode")
+    #     # load the tissue position dataframe
+    #     ti_po_df = pd.read_parquet(tissue_position_path).set_index("barcode")
 
-        # write the spatial to obsm
-        self._adata.obsm["spatial"] = (pd.DataFrame(index=self._adata.obs_names)
-                                       .join(ti_po_df[["array_col","array_row"]])
-                                       .to_numpy())
+    #     # write the spatial to obsm
+    #     self._adata.obsm["spatial"] = (pd.DataFrame(index=self._adata.obs_names)
+    #                                    .join(ti_po_df[["array_col","array_row"]])
+    #                                    .to_numpy())
 
-        return None
+    #     return None
 
     def get_stardist_labels(self,
-                            model_path:str=None,
+                            model_path:str|None = None,
                             microns_per_pixel:float=0.3,
-                            platform:str="10x",
-                            model_name:str = "2D_versatile_he",
-                            resize_source_image:bool=True):
+                            platform:Literal["10x","stereo"]="10x",
+                            model_name:str|None = None) -> None:
         
         # resize the source image to adapt the stardist model
-        if resize_source_image:
+        if platform == "10x":
             self._adata.uns["source_image"].resize_source_image(microns_per_pixel=microns_per_pixel)
+            if model_name is None:
+                model_name = "2D_versatile_he"
+        elif platform == "stereo":
+            if model_name is None:
+                model_name = "2D_versatile_fluo"
 
         # load pixel matrix
         self._adata.uns["source_image"].load_pixel_matrix(normalize=True,
@@ -154,7 +234,8 @@ class Pango_Accessor:
                                                             model_name=model_name)
 
         # expand the label to 3 pixel surrounding
-        self._adata.uns["source_image"].expand_mask_labels(mask_label="stardist_label")
+        self._adata.uns["source_image"].expand_mask_labels(mask_label="stardist_label",
+                                                           platform=platform)
 
         # resample the label to barcode
         self._adata.uns["source_image"].resample_mask_labels(mask_label="stardist_label",
@@ -172,8 +253,8 @@ class Pango_Accessor:
     def aggregate_labels (self,
                          label:str,
                          except_labels:list,
-                         platform:str=None,
-                         chip_series:str=None) -> AnnData:
+                         platform:str|None = None,
+                         chip_series:str|None = None) -> ad.AnnData:
         
         # transform the label to category
         self._adata.obs[label] = (np.char.add(f"{label}_",
@@ -227,12 +308,17 @@ class Pango_Accessor:
             self._adata.obs["platform"] = platform
         if chip_series is not None:
             self._adata.obs["chip_series"] = chip_series
+        
+        # sort the adata by obs_names
+        cell_names = pd.Index(self._adata.obs_names).astype(str)
+        order_nums = cell_names.str.rsplit("_", n=1).str[-1].astype(int)
+        self._adata = self._adata[np.argsort(order_nums)].copy()
 
         return self._adata
 
     def add_obs_to_coordinate_mapping(self,
                                       mapping_key:str,
-                                      obs_cols:list):
+                                      obs_cols:list) -> None:
         
         self._adata.uns["source_image"].add_labels_to_coordinate_mapping(by="barcode",
                                                                          mapping_key=mapping_key,
@@ -253,8 +339,8 @@ class Pango_Accessor:
 
     def fit_scvi_models(self,
                         batch_key:str="batch",
-                        categorical_covariate_keys:list=None,
-                        continuous_covariate_keys:list=None,
+                        categorical_covariate_keys:list | None=None,
+                        continuous_covariate_keys:list | None=None,
                         highly_variable_genes:bool=False):
         
         # set the random seed for reproducibility
@@ -429,13 +515,34 @@ class Pango_Accessor:
         return None
 
     def map_cell_type(self,
-                      query_markers:str,
-                      precomputed_stats:str):
+                      cache_dir:str | None=None,
+                      query_markers_path:str | None=None,
+                      precomputed_stats_path:str | None=None,
+                      output_dir:str | None=None,
+                      makers_name:Literal["mouse_markers_230821"]="mouse_markers_230821",
+                      stats_name:Literal["precomputed_stats_ABC_revision_230821"]="precomputed_stats_ABC_revision_230821") -> None:
 
         map_cell_type_pango(adata=self._adata,
-                            query_markers=query_markers,
-                            precomputed_stats=precomputed_stats)
+                            cache_dir=cache_dir,
+                            query_markers_path=query_markers_path,
+                            precomputed_stats_path=precomputed_stats_path,
+                            output_dir=output_dir,
+                            makers_name=makers_name,
+                            stats_name=stats_name,
+                            inplace=True)
 
+        return None
+    
+    def add_ensembl_ids(self,
+                        gtf_path:str|None = None) -> None:
+        
+        map_df = (convert_gene_symbols_to_ensembl_ids_pango(gene_symbols=self._adata.var_names.tolist(),
+                                                            gtf_path=gtf_path)
+                  .set_index("gene_symbol"))
+        
+        self._adata.var = map_df.join(self._adata.var,
+                                      how="right")
+        
         return None
 
 
@@ -455,11 +562,11 @@ def load_10x_h5_pango(h5_path: str):
 
     return adata
 
-def concat_pango(adata_list:list,
+def concat_pango(adata_list:list[ad.AnnData],
                  batch_key:list,
-                 save_var:list=None,
+                 save_var:list | None=None,
                  normalize:bool=False,
-                 highly_variable_genes:bool=False) -> AnnData:
+                 highly_variable_genes:bool=False) -> ad.AnnData:
 
     # get the save var colnumns
     ad_num = len(adata_list)
@@ -506,7 +613,7 @@ def concat_pango(adata_list:list,
 
     return adata_comb
 
-def get_the_rank_genes_pango(adata:AnnData,
+def get_the_rank_genes_pango(adata:ad.AnnData,
                              rank_group:str="spatialleiden",
                              pval_cutoff:float=0.05,
                              log2fc_min:float=1,
@@ -532,61 +639,3 @@ def get_the_rank_genes_pango(adata:AnnData,
 
     return gene_list
 
-def map_cell_type_pango(adata:AnnData,
-                        query_markers:str,
-                        precomputed_stats:str,
-                        output_dir:str=None):
-
-    # verify the output directionary
-    if output_dir is None:
-        output_dir = tempfile.mkdtemp(prefix="map_cell_type_")
-        clear_tmp = True
-    else:
-        clear_tmp = False
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    # generate the tmp file
-    tmp_path_h5ad = os.path.join(output_dir, f"{uuid.uuid4().hex}.h5ad")
-
-    tmp_path_csv = os.path.join(output_dir, f"{uuid.uuid4().hex}.csv")
-
-    tmp_path_json = os.path.join(output_dir, f"{uuid.uuid4().hex}.json")
-
-    # pre-address the adata
-    adata.X = adata.layers["counts"]
-    adata.pango.save(save_path=tmp_path_h5ad)
-
-    # the configuration for map_cell_type
-    config = {
-        "query_path": tmp_path_h5ad,
-        "extended_result_path": tmp_path_json,
-        "csv_result_path": tmp_path_csv,
-        "drop_level": "CCN20230722_SUPT",
-        "cloud_safe": False,
-        "query_markers": {
-            "serialized_lookup": query_markers
-            },
-        "precomputed_stats": {
-            "path": precomputed_stats
-            },
-        "type_assignment": {
-            "normalization": "raw",
-            "n_processors": 2
-            }
-    }
-
-    # run the map cell type process
-    runner = FromSpecifiedMarkersRunner(args=[], input_data=config)
-    runner.run()
-
-    # add the cell type to adata
-    adata.obs = adata.obs.join(pd.read_csv(tmp_path_csv,
-                                           comment='#')
-                                           .set_index("cell_id"))
-
-    # clear the output directionary
-    if clear_tmp:
-        shutil.rmtree("/path/to/dir")
-
-    return None

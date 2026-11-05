@@ -1,20 +1,22 @@
+from typing import Literal
 
+import csbdeep
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import stardist.models
-import matplotlib.pyplot as plt
-import csbdeep.utils 
-from scipy.sparse import csr_matrix
 from PIL import Image
-from skimage import segmentation
 from scipy import ndimage
-from PIL import Image
+from scipy.sparse import csr_matrix
+from skimage import segmentation
 
 from . import coordinate_system_pango as csp
+from .utils_coordinate_system_pango import (
+    apply_affine_matrix_to_coordinate,
+    build_affine_matrix,
+    estimate_affine_matrix_from_coordinate_mapping,
+)
 
-from .utils_coordinate_system_pango import (estimate_affine_matrix_from_coordinate_mapping,
-                                            build_affine_matrix,
-                                            apply_affine_matrix_to_coordinate)
 Image.MAX_IMAGE_PIXELS = None
 
 class Image_Pango:
@@ -26,24 +28,24 @@ class Image_Pango:
 
         # build the coordinate
         self.coordinate = csp.Coordinate_Pango(source_microns_per_pixel=microns_per_pxl,
-                                                                       source_pixel_coordinate=self.source_image.size)
+                                               source_pixel_coordinate=self.source_image.size)
 
         # build the slot for pixel matrix
         self.pixel_matrix = None
 
         # build the slot for the mask matrix
-        self.mask_matrix = dict()
+        self.mask_matrix = {}
 
-    def save_source_image(self,
-                          path:str):
+    # def save_source_image(self,
+    #                       path:str):
 
-        self.source_image.save(path)
+    #     self.source_image.save(path)
 
-        return None
+    #     return None
 
     def load_pixel_matrix(self,
                           normalize:bool=True,
-                          platform:str="10x"):
+                          platform:Literal["10x","stereo"]="10x") -> None:
 
         # load the pixel matrix as array
         pxl_mat = np.asarray(self.source_image)
@@ -60,15 +62,16 @@ class Image_Pango:
         return None
 
     def fit_stardist_models(self,
-                            model_path:str=None,
-                            model_name:str = "2D_versatile_he",
-                            platform:str = "10x"):
+                            model_path:str|None = None,
+                            model_name:Literal["2D_versatile_he","2D_versatile_fluo"]="2D_versatile_he",
+                            platform:Literal["10x","stereo"]="10x") -> None:
 
         # verify the platform
         if platform == "10x":
             axes = "YXC"
         if platform == "stereo":
             axes = "YX"
+            
         # load the model
         if model_path is not None:
             model = stardist.models.StarDist2D(None,
@@ -92,8 +95,8 @@ class Image_Pango:
 
     def add_coordinate_mapping(self,
                                coordinate_mapping:pd.DataFrame,
-                               mapping_key:str=None,
-                               scalefactor:float=None):
+                               mapping_key:str|None = None,
+                               scalefactor:float|None = None) -> None:
 
         # verify the mapping_symbol
         if mapping_key is None:
@@ -122,7 +125,7 @@ class Image_Pango:
         return None
 
     def extract_mapping_area(self,
-                             mapping_key:str=None):
+                             mapping_key:str|None = None):
 
         # verify mapping_key
         if mapping_key is None:
@@ -135,14 +138,12 @@ class Image_Pango:
         ymax_crop = int(np.ceil(np.max(self.coordinate.coordinate_mapping[mapping_key]["pxl_row"])))
 
         # verify the crop boundary
-        if  xmin_crop < 0:
-            xmin_crop = 0
-        if  ymin_crop < 0:
-            ymin_crop = 0
-        if  xmax_crop > self.coordinate.source_coordinate["pixel_coordinate"][0]:
-            xmax_crop = self.coordinate.source_coordinate["pixel_coordinate"][0]
-        if  ymax_crop > self.coordinate.source_coordinate["pixel_coordinate"][1]:
-            ymax_crop = self.coordinate.source_coordinate["pixel_coordinate"][1]
+        xmin_crop = max(xmin_crop, 0)
+        ymin_crop = max(ymin_crop, 0)
+        xmax_crop = min(xmax_crop, 
+                        self.coordinate.source_coordinate["pixel_coordinate"][0])
+        ymax_crop = min(ymax_crop, 
+                        self.coordinate.source_coordinate["pixel_coordinate"][1])
 
         self.source_image = self.source_image.crop((xmin_crop, ymin_crop, xmax_crop, ymax_crop))
         self.coordinate.crop_source_image((xmin_crop, ymin_crop, xmax_crop, ymax_crop))
@@ -150,7 +151,7 @@ class Image_Pango:
         return None
 
     def extract_image_area(self,
-                           mapping_key:str=None):
+                           mapping_key:str|None = None):
 
         # verify mapping_key
         if mapping_key is None:
@@ -160,10 +161,10 @@ class Image_Pango:
         mapping_coordinate = self.coordinate.coordinate_mapping[mapping_key].copy()
 
         # generate the filter mask
-        mask = (((mapping_coordinate["pxl_row"] >= 0) &
+        mask = ((mapping_coordinate["pxl_row"] >= 0) &
                  (mapping_coordinate["pxl_row"] < np.ceil(self.coordinate.source_coordinate["pixel_coordinate"][1])) &
                  (mapping_coordinate["pxl_col"] >= 0) &
-                 (mapping_coordinate["pxl_col"] < np.ceil(self.coordinate.source_coordinate["pixel_coordinate"][0]))))
+                 (mapping_coordinate["pxl_col"] < np.ceil(self.coordinate.source_coordinate["pixel_coordinate"][0])))
 
         # apply filter mask
 
@@ -175,17 +176,13 @@ class Image_Pango:
                           xmin_crop:int,
                           ymin_crop:int,
                           xmax_crop:int,
-                          ymax_crop:int):
+                          ymax_crop:int) -> None:
 
         # verify the crop boundary
-        if  xmin_crop < 0:
-            xmin_crop = 0
-        if  ymin_crop < 0:
-            ymin_crop = 0
-        if  xmax_crop > self.coordinate.source_coordinate["pixel_coordinate"][0]:
-            xmax_crop = self.coordinate.source_coordinate["pixel_coordinate"][0]
-        if  ymax_crop > self.coordinate.source_coordinate["pixel_coordinate"][1]:
-            ymax_crop = self.coordinate.source_coordinate["pixel_coordinate"][1]
+        xmin_crop = max(xmin_crop, 0)
+        ymin_crop = max(ymin_crop, 0)
+        xmax_crop = min(xmax_crop, self.coordinate.source_coordinate["pixel_coordinate"][0])
+        ymax_crop = min(ymax_crop, self.coordinate.source_coordinate["pixel_coordinate"][1])
 
         # crop the source image
         self.source_image = self.source_image.crop((xmin_crop, ymin_crop, xmax_crop, ymax_crop))
@@ -196,11 +193,11 @@ class Image_Pango:
         return None
 
     def resize_source_image(self,
-                            scalefactor:float=None,
-                            microns_per_pixel:float=None):
+                            scalefactor:float|None = None,
+                            microns_per_pixel:float|None = None ) -> None:
 
         # verify scalefactor and microns_per_pixel
-        if (microns_per_pixel is None) == (scalefactor is None):
+        if (microns_per_pixel is None) and (scalefactor is None):
             raise ValueError("must pass microns_per_pixel or scalefactor")
         elif scalefactor is None:
             scalefactor = self.coordinate.source_coordinate["microns_per_pixel"]/microns_per_pixel
@@ -215,17 +212,23 @@ class Image_Pango:
         return None
 
     def expand_mask_labels(self,
-                           mask_label):
+                           mask_label:str,
+                           platform:Literal["10x","stereo"]="10x") -> None:
+        
+        if platform == "10x":
+            distance = 20
+        elif platform == "stereo":
+            distance = 12
 
         self.mask_matrix[f"{mask_label}_expanded"] = csr_matrix(segmentation.expand_labels(label_image=(self.mask_matrix[mask_label]
                                                                                                         .toarray()),
-                                                                                           distance=20))
+                                                                                           distance=distance))
 
         return None
 
     def resample_mask_labels(self,
                              mask_label:str,
-                             mapping_key:str):
+                             mapping_key:str) -> None:
 
         # calculate the resample labels using nearest
         self.coordinate.coordinate_mapping[mapping_key][mask_label] = ndimage.map_coordinates(input = self.mask_matrix[mask_label].toarray(),
@@ -283,10 +286,10 @@ class Image_Pango:
                         .pivot(index="array_row",
                                columns="array_col",
                                values=label)
-                        .reindex(index = range((np.max(self.coordinate.coordinate_mapping[mapping_key]["array_row"]
-                                                      .to_numpy())+1)),
-                                 columns = range((np.max(self.coordinate.coordinate_mapping[mapping_key]["array_col"]
-                                                        .to_numpy())+1)))
+                        .reindex(index = range(np.max(self.coordinate.coordinate_mapping[mapping_key]["array_row"]
+                                                      .to_numpy())+1),
+                                 columns = range(np.max(self.coordinate.coordinate_mapping[mapping_key]["array_col"]
+                                                        .to_numpy())+1))
                         .to_numpy())
 
         label_matrix = np.nan_to_num(label_matrix, nan=0).astype(int)
@@ -296,7 +299,7 @@ class Image_Pango:
     def add_labels_to_coordinate_mapping(self,
                                          mapping_key:str,
                                          label_df:pd.DataFrame,
-                                         by:str):
+                                         by:str) -> None:
 
         self.coordinate.coordinate_mapping[mapping_key] = self.coordinate.coordinate_mapping[mapping_key].merge(label_df,
                                                                                                                 on=by,
@@ -339,21 +342,24 @@ class Image_Pango:
         return self.coordinate.coordinate_mapping[mapping_key].copy()
 
     def get_mask_label_plot(self,
+                            mask_labels:str,
+                            expanded_mask_labels:str|None = None,
                             background_plot:bool=False):
 
-        rgb_img = mask_labels_to_random_color_png(mask_labels=self.mask_matrix["stardist_label"].toarray(), 
+        rgb_img = mask_labels_to_random_color_png(mask_labels=self.mask_matrix[mask_labels].toarray(),
+                                                  expanded_mask_labels=(self.mask_matrix[expanded_mask_labels].toarray() if expanded_mask_labels is not None else None), 
                                                   image_background=self.source_image,
                                                   background_plot=background_plot)
 
         return rgb_img
 
-def mask_labels_to_random_color_png(mask_labels,
-                                    expanded_mask_labels=None, 
-                                    image_background:Image=None,
+def mask_labels_to_random_color_png(mask_labels:np.ndarray,
+                                    expanded_mask_labels:np.ndarray|None = None, 
+                                    image_background:Image.Image|None = None,
                                     background_plot:bool=False,
                                     alpha:float=0.5,
                                     alpha_expanded:float=0.2,
-                                    seed:int=2026):
+                                    seed:int=2026) -> Image.Image:
     
     num_labels = int(mask_labels.max()) + 1 
 

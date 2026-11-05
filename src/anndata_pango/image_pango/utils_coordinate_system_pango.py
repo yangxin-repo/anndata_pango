@@ -1,7 +1,8 @@
 
+import cv2
 import numpy as np
 import pandas as pd
-import cv2
+
 
 def build_affine_matrix(am_x:float = 1, # amplify x
                         am_y:float = 1, # amplify y
@@ -9,7 +10,7 @@ def build_affine_matrix(am_x:float = 1, # amplify x
                         cr_y:float = 0, # crop y
                         m_x:float = 0,  # move x
                         m_y:float = 0,  # move y
-                        resize:tuple[float,float] = None): # the resize affine matrix
+                        resize:tuple[float, float]|None = None) -> np.ndarray: # the resize affine matrix
 
     # verify whether resize
     if resize is not None:
@@ -26,7 +27,7 @@ def build_affine_matrix(am_x:float = 1, # amplify x
     return affine_matrix
 
 def apply_affine_matrix_to_coordinate(coordinate:pd.DataFrame,
-                                      affine_matrix:np.ndarray):
+                                      affine_matrix:np.ndarray) -> np.ndarray:
 
     # extract the coordinate
     points = coordinate[["array_row", "array_col"]].to_numpy(dtype=np.float64)
@@ -41,7 +42,7 @@ def apply_affine_matrix_to_coordinate(coordinate:pd.DataFrame,
 
     return affined_pts
 
-def estimate_affine_matrix_from_coordinate_mapping(coordinate_mapping:pd.DataFrame):
+def estimate_affine_matrix_from_coordinate_mapping(coordinate_mapping:pd.DataFrame) -> np.ndarray:
 
     # extract the source points
     src_pts = np.float32(coordinate_mapping[["array_row","array_col"]].to_numpy())
@@ -49,7 +50,7 @@ def estimate_affine_matrix_from_coordinate_mapping(coordinate_mapping:pd.DataFra
     # extract the destination points
     dst_pts = np.float32(coordinate_mapping[["pxl_row","pxl_col"]].to_numpy())
 
-    M, inliers = cv2.estimateAffine2D(
+    M, _inliers = cv2.estimateAffine2D(
         src_pts, dst_pts,
         method=cv2.RANSAC,
         ransacReprojThreshold=3.0

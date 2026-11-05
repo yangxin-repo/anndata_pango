@@ -1,12 +1,16 @@
 
-from .image_pango.image_pango import Image_Pango
-from .anndata_pango import load_10x_h5_pango
-from .anndata_pango import concat_pango
-from .anndata_pango import get_the_rank_genes_pango
-from .anndata_pango import map_cell_type_pango
+# solve the LLVM import error
+import triton
 
-# register Pango_Accessor
-from .anndata_pango import Pango_Accessor
+from .anndata_pango import (
+    Pango_Accessor,
+    concat_pango,
+    get_the_rank_genes_pango,  # noqa: F401
+    load_10x_h5_pango,
+)
+from .image_pango.image_pango import mask_labels_to_random_color_png
+from .utils_anndata_pango import map_cell_type_pango  # noqa: F401
+
 
 def main() -> None:
     print("Hello from anndata_pango!")

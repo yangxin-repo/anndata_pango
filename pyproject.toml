@@ -8,24 +8,30 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+
     "anndata",
+    "scanpy",
+    "spatialleiden",
+    "squidpy",
+    "pyensembl",
+    #"cell_type_mapper @ git+https://github.com/AllenInstitute/cell_type_mapper.git",
+
     "numpy",
     "pandas",
-    "Pillow",
-    "scanpy",
     "scipy",
+
+    "Pillow",
+    "opencv-python",
+    "scikit-image",
+
+    "tensorflow[and-cuda]",
+    "torch",
     "stardist",
     "scvi-tools",
     "h5py",
+
     "requests",
-    "playwright",
-    "skimage",
-    "spatialleiden",
-    "squidpy",
-    "uuid",
-    "cell_type_mapper",
-    "tempfile",
-    "shutil"
+    "playwright"
 ]
 
 [project.scripts]
