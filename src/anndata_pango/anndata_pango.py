@@ -1,4 +1,5 @@
 
+import gc
 import warnings
 from typing import Literal
 
@@ -105,18 +106,23 @@ class Pango_Accessor:
                     ti_po_df = pd.read_parquet(tissue_position_path)
                     ti_po_df["pxl_row"] = (ti_po_df[pxl_row]
                                            .to_numpy()
+                                           .flatten()
                                            .astype(np.float32))
                     ti_po_df["pxl_col"] = (ti_po_df[pxl_col]
                                            .to_numpy()
+                                           .flatten()
                                            .astype(np.float32))
                     ti_po_df["array_row"] = (ti_po_df[array_row]
                                              .to_numpy()
+                                             .flatten()
                                              .astype(np.float32))
                     ti_po_df["array_col"] = (ti_po_df[array_col]
                                              .to_numpy()
+                                             .flatten()
                                              .astype(np.float32))
                     ti_po_df.index = (ti_po_df[barcode]
                                       .to_numpy()
+                                      .flatten()
                                       .astype(str))
                 except Exception as exc:
                     raise ValueError("Columns not found in tissue position dataframe for 10x platform.") from exc
@@ -196,19 +202,6 @@ class Pango_Accessor:
 
         return None
 
-    # def load_tissue_position(self,
-    #                          tissue_position_path:str) -> None:
-
-    #     # load the tissue position dataframe
-    #     ti_po_df = pd.read_parquet(tissue_position_path).set_index("barcode")
-
-    #     # write the spatial to obsm
-    #     self._adata.obsm["spatial"] = (pd.DataFrame(index=self._adata.obs_names)
-    #                                    .join(ti_po_df[["array_col","array_row"]])
-    #                                    .to_numpy())
-
-    #     return None
-
     def get_stardist_labels(self,
                             model_path:str|None = None,
                             microns_per_pixel:float=0.3,
@@ -276,11 +269,13 @@ class Pango_Accessor:
         if 'counts' not in self._adata.layers:
             self._adata.layers["counts"] = self._adata.X.copy()
 
+        print("start to aggregate the adata")
         self._adata = sc.get.aggregate(self._adata,
                                        by=label,
                                        func="sum",
                                        layer="counts")
-
+        print("finished aggregating the adata")
+        
         # aggregate spatial coordinate and write to adata
         spatial_df = (spatial_df
                       .groupby(by=label,
@@ -293,7 +288,8 @@ class Pango_Accessor:
         # # write sum as counts in csr_matrix dtype
         self._adata.layers["counts"] = csr_matrix(self._adata.layers["sum"])
         del self._adata.layers["sum"]
-
+        gc.collect()
+        
         # calculate the QC metrics
         self._adata.var["mt"] = self._adata.var_names.str.startswith("mt-")
         sc.pp.calculate_qc_metrics(adata=self._adata,
@@ -445,8 +441,8 @@ class Pango_Accessor:
         return None
 
     def conduct_spatial_cluster(self,
-                                rank_method:str="wilcoxon",
-                                max_iter:int=None):
+                                rank_method:Literal["wilcoxon","logreg"]="wilcoxon",
+                                max_iter:int|None = None) -> None:
 
         if rank_method=="logreg" and max_iter is None:
             max_iter = 100
@@ -461,7 +457,8 @@ class Pango_Accessor:
         sc.experimental.pp.highly_variable_genes(
             self._adata,
             flavor='pearson_residuals',
-            n_top_genes=2000)
+            n_top_genes=2000
+            )
 
         adata_hvg = self._adata[:,self._adata.var["highly_variable"]].copy()
 
