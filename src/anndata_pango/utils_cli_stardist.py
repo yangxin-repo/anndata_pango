@@ -1,5 +1,8 @@
 
+import shutil
 import tempfile
+from pathlib import Path
+from typing import Literal
 
 import anndata as ad
 
@@ -55,7 +58,7 @@ def stardist_pipeline_stage1_stereo(*,
                                     chip_series:str,
                                     platform:str = "stereo",
                                     image_save_path:str|None = None,
-                                    save_label_image:bool=False):
+                                    save_label_image:bool=False) -> str:
     
     # create a temporary directory to store intermediate files
     tmp_dir = tempfile.mkdtemp(prefix="stardist_segmentation_stereo_")
@@ -86,3 +89,41 @@ def stardist_pipeline_stage1_stereo(*,
     adata.pango.save(save_path=f"{tmp_dir}/{chip_series}.h5ad")
     
     return f"{tmp_dir}/{chip_series}.h5ad"
+
+def stardist_pipeline_stage2(*,
+                             adata_path:str,
+                             chip_series:str,
+                             gtf_path:str,
+                             map_cell_type_cache_dir:str,
+                             output_dir:str,
+                             platform:Literal["10x","stereo"]):
+    
+    # read the segemented adata
+    adata = ad.read_h5ad(adata_path)
+    
+    # aggregate labels
+    adata = adata.pango.aggregate_labels(label="stardist_label_expanded",
+                                         except_labels=[0],
+                                         platform=platform,
+                                         chip_series=chip_series)
+
+    # transfer gene symbol to ensembl ids
+    adata.pango.add_ensembl_ids(gtf_path=gtf_path)
+    adata.var["gene_symbol"] = adata.var_names.to_numpy()
+
+    # allocate cell types
+    adata.var_names = adata.var["gene_ids"].tolist()
+    adata.pango.map_cell_type(cache_dir=map_cell_type_cache_dir)
+    
+    # perform spatial cluster
+    adata.pango.conduct_spatial_cluster(rank_method="logreg", 
+                                        max_iter=1000)
+    
+    # save adata
+    adata_save_path = f"{output_dir}/{chip_series}.h5ad"
+    adata.pango.save(save_path=adata_save_path)
+    
+    # clean up the temporary directory
+    shutil.rmtree(Path(adata_path).parent)  
+    
+    return adata_save_path

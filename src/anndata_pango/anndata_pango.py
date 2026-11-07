@@ -270,7 +270,10 @@ class Pango_Accessor:
             self._adata.layers["counts"] = self._adata.X.copy()
         
         # delete the X
-        del self._adata.X
+        try:
+            del self._adata.X
+        except:  # noqa: E722, S110
+            pass
 
         print("start to aggregate the adata")
         self._adata = sc.get.aggregate(self._adata,
@@ -340,7 +343,8 @@ class Pango_Accessor:
                         batch_key:str="batch",
                         categorical_covariate_keys:list | None=None,
                         continuous_covariate_keys:list | None=None,
-                        highly_variable_genes:bool=False):
+                        highly_variable_genes:bool=False,
+                        max_epochs:int|None = None):
         
         # set the random seed for reproducibility
         scvi.settings.seed = 2026
@@ -368,7 +372,7 @@ class Pango_Accessor:
                                 gene_likelihood="zinb")
 
         # train the model
-        model.train(max_epochs=200,
+        model.train(max_epochs=max_epochs,
                     batch_size=128 ,
                     train_size=0.9,
                     early_stopping=True,
