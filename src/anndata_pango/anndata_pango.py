@@ -268,6 +268,9 @@ class Pango_Accessor:
         # aggregate stardist labels
         if 'counts' not in self._adata.layers:
             self._adata.layers["counts"] = self._adata.X.copy()
+        
+        # delete the X
+        del self._adata.X
 
         print("start to aggregate the adata")
         self._adata = sc.get.aggregate(self._adata,
