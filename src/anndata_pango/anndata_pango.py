@@ -420,6 +420,55 @@ class Pango_Accessor:
         self._adata.obsm["X_sysVI"] = model.get_latent_representation()
 
         return model
+    
+    def fit_scANVI_models(self,
+                          scvi_model_path:str):
+        
+        self._adata.pango.filter_cell_types()
+        
+        scvi_model = scvi.model.SCVI.load(scvi_model_path, 
+                                          adata=self._adata)
+        
+        scanvi_model = scvi.model.SCANVI.from_scvi_model(scvi_model,
+                                                         labels_key="cell_type_label",
+                                                         unlabeled_category="Unknown")
+        
+        scanvi_model.train()
+        
+        probabilities = scanvi_model.predict(soft=True)  
+
+        top1_type_loc = np.argsort(-probabilities.values, 
+                                   axis=1)[:, :1]
+        
+        top1_labels = (probabilities
+                       .columns
+                       .to_numpy()[top1_type_loc.ravel()]
+                       .reshape(top1_type_loc.shape))
+        
+        top1_probs = np.sort(probabilities.values, 
+                             axis=1)[:, ::-1][:,:1]
+        
+        revised_cell_types = pd.DataFrame(top1_labels,
+                                          index=probabilities.index,
+                                          columns=["cell_type_label_scANVI"])
+        
+        revised_cell_types[top1_probs<0.9] = "Unknown"
+        
+        self._adata.obs = (self._adata.obs
+                           .join(revised_cell_types))
+
+        return None
+    
+    def filter_cell_types(self):
+        
+        self._adata.obs["aggregate_probability"] = (self._adata.obs["class_bootstrapping_probability"].fillna(0)*
+                                                    self._adata.obs["subclass_bootstrapping_probability"].fillna(0))
+        
+        self._adata.obs["cell_type_label"] = np.where(self._adata.obs["aggregate_probability"]>0.5,
+                                                      self._adata.obs["subclass_label"],
+                                                      "Unknown")
+        
+        return None
 
     def build_graph_related_space(self,
                                   use_rep:str="X_scvi",
@@ -449,11 +498,17 @@ class Pango_Accessor:
 
     def conduct_spatial_cluster(self,
                                 rank_method:Literal["wilcoxon","logreg"]="wilcoxon",
-                                max_iter:int|None = None) -> None:
+                                max_iter:int|None = None,
+                                n_pcs:int|None = 30,
+                                n_neighbors:int|None = 15,
+                                random_state:int=2026,
+                                layer_ratio:float=1) -> None:
 
+        # check the rank_method and max_iter
         if rank_method=="logreg" and max_iter is None:
             max_iter = 100
 
+        # get the highly variable genes
         self._adata.X = self._adata.layers["counts"].copy()
         sc.pp.filter_cells(self._adata,
                            min_counts=1,
@@ -461,12 +516,11 @@ class Pango_Accessor:
         sc.pp.filter_genes(self._adata,
                            min_cells=1,
                            inplace=True)
-        sc.experimental.pp.highly_variable_genes(
-            self._adata,
-            flavor='pearson_residuals',
-            n_top_genes=2000
-            )
+        sc.experimental.pp.highly_variable_genes(self._adata,
+                                                 flavor='pearson_residuals',
+                                                 n_top_genes=2000)
 
+        # subset the adata to highly variable genes
         adata_hvg = self._adata[:,self._adata.var["highly_variable"]].copy()
 
         sc.pp.filter_cells(adata_hvg,
@@ -476,32 +530,43 @@ class Pango_Accessor:
                            min_cells=1,
                            inplace=True)
 
+        # normalize the adata_hvg to pearson residuals
         sc.experimental.pp.normalize_pearson_residuals(adata_hvg,
                                                        inplace=True)
 
+        # perform PCA on the highly variable genes
         sc.pp.pca(adata_hvg, 
                   n_comps=50,
-                  random_state=42)
+                  random_state=random_state)
 
+        # subset the adata to filtered cells and write the PCA to obsm
         self._adata._inplace_subset_obs(self._adata.obs_names.isin(adata_hvg.obs_names))
         self._adata.obsm["X_pca"] = (pd.DataFrame(adata_hvg.obsm["X_pca"],
                                                   index=adata_hvg.obs_names)
                                      .reindex(self._adata.obs_names)
                                      .values)
         
+        # build the neighbor graph and spatial neighbor graph
         sc.pp.neighbors(self._adata,
-                        random_state=42,
-                        n_neighbors=20,
+                        random_state=2026,
+                        n_neighbors=n_neighbors,
                         use_rep="X_pca",
-                        n_pcs=50) 
+                        n_pcs=n_pcs) 
         
         sq.gr.spatial_neighbors_knn(self._adata,
-                                    n_neighs = 20)
+                                    n_neighs = n_neighbors)
+        
+        # build the leiden clustering and spatial leiden clustering
+        sc.tl.leiden(self._adata, 
+                     resolution=1.0, 
+                     key_added=f'leiden_nn{n_neighbors}',
+                     flavor='igraph',
+                     n_iterations=-1)
 
         sl.spatialleiden(self._adata, 
-                         layer_ratio=0.5,
+                         layer_ratio=layer_ratio,
                          n_iterations=-1,
-                         random_state=42,
+                         random_state=random_state,
                          latent_neighbors_key="connectivities",
                          spatial_neighbors_key="spatial_connectivities",
                          key_added="spatialleiden")
@@ -512,10 +577,12 @@ class Pango_Accessor:
         sc.pp.log1p(self._adata)
         self._adata.layers["log1p"] = self._adata.X.copy()
 
+        # rank the genes for spatial leiden clustering
         sc.tl.rank_genes_groups(self._adata, 
                                 groupby='spatialleiden', 
                                 method=rank_method,
-                                max_iter=max_iter)
+                                max_iter=max_iter,
+                                key_added="rank_genes_spatialleiden")
         return None
 
     def map_cell_type(self,
@@ -568,23 +635,8 @@ def load_10x_h5_pango(h5_path: str):
 
 def concat_pango(adata_list:list[ad.AnnData],
                  batch_key:list,
-                 save_var:list | None=None,
                  normalize:bool=False,
                  highly_variable_genes:bool=False) -> ad.AnnData:
-
-    # get the save var colnumns
-    ad_num = len(adata_list)
-    if save_var is None:
-        save_var=[[] for i in range(ad_num)]
-    else:
-         var_num = len(save_var)
-         if ad_num > var_num:
-             save_var.extend([[] for _ in range(ad_num-var_num)])
-         elif ad_num <= var_num:
-             save_var = save_var[:ad_num]
-
-    for ad_obj,var_col in zip(adata_list,save_var):
-        ad_obj.var = ad_obj.var[var_col].copy()
 
     # normalize the adata list
     if normalize:
@@ -610,7 +662,7 @@ def concat_pango(adata_list:list[ad.AnnData],
     # concat adata list
     adata_comb = ad.concat(adata_list,
                            join="inner",
-                           merge="first",
+                           merge="unique",
                            label="batch",
                            keys=batch_key,
                            index_unique="_")
@@ -623,14 +675,24 @@ def get_the_rank_genes_pango(adata:ad.AnnData,
                              log2fc_min:float=1,
                              gene_num:int=500):
 
+    # check the rank_genes key in adata.uns
+    if "rank_genes_groups" in adata.uns:
+        key = "rank_genes_groups"
+    elif "rank_genes_spatialleiden" in adata.uns:
+        key = "rank_genes_spatialleiden"
+    else:
+        raise KeyError("Neither 'rank_genes_groups' nor 'rank_genes_spatialleiden' found in adata.uns")
+
     # get the total gene set of meaningful rank genes
     all_sig = set()
     for grp in adata.obs[rank_group].unique().astype(str):
+        
         df = (sc.get.rank_genes_groups_df(adata,
-                                         group=grp, 
-                                         pval_cutoff=pval_cutoff, 
-                                         log2fc_min=log2fc_min)
-                                         .sort_values('scores', ascending=False))
+                                        group=grp, 
+                                        pval_cutoff=pval_cutoff, 
+                                        log2fc_min=log2fc_min,
+                                        key=key)
+                                        .sort_values('scores', ascending=False))
 
         df = df[df["scores"]>0]
 

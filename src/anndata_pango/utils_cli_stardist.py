@@ -94,9 +94,10 @@ def stardist_pipeline_stage2(*,
                              adata_path:str,
                              chip_series:str,
                              gtf_path:str,
-                             map_cell_type_cache_dir:str,
                              output_dir:str,
-                             platform:Literal["10x","stereo"]):
+                             platform:Literal["10x","stereo"],
+                             map_cell_type_cache_dir:str|None=None,
+                             map_cell_types:bool=True) -> str:
     
     # read the segemented adata
     adata = ad.read_h5ad(adata_path)
@@ -111,13 +112,21 @@ def stardist_pipeline_stage2(*,
     adata.pango.add_ensembl_ids(gtf_path=gtf_path)
     adata.var["gene_symbol"] = adata.var_names.to_numpy()
 
+    # confirm the var_names are unique and set them to ensembl ids
+    adata.var_names = adata.var["ensembl_id"].to_numpy().astype(str)
+    adata.var_names_make_unique()
+    
     # allocate cell types
-    adata.var_names = adata.var["gene_ids"].tolist()
-    adata.pango.map_cell_type(cache_dir=map_cell_type_cache_dir)
+    if map_cell_types:
+        if map_cell_type_cache_dir is None:
+            raise ValueError("map_cell_type_cache_dir is None, please provide a valid cache directory for cell type mapping.")
+        else:
+            adata.pango.map_cell_type(cache_dir=map_cell_type_cache_dir)
     
     # perform spatial cluster
     adata.pango.conduct_spatial_cluster(rank_method="logreg", 
-                                        max_iter=1000)
+                                        max_iter=1000,
+                                        layer_ratio=0.5)
     
     # save adata
     adata_save_path = f"{output_dir}/{chip_series}.h5ad"

@@ -151,7 +151,8 @@ def run_stardist_pipeline_cell_cluser_and_annotation(*,
                                                      gtf_path:str,
                                                      map_cell_type_cache_dir:str,
                                                      output_dir:str,
-                                                     platform:Literal["10x","stereo"]) -> str:
+                                                     platform:Literal["10x","stereo"],
+                                                     map_cell_types:bool) -> str:
     
     # create the subprocess context
     ctx = mp.get_context("spawn") 
@@ -163,10 +164,11 @@ def run_stardist_pipeline_cell_cluser_and_annotation(*,
               "chip_series":chip_series,
               "gtf_path":gtf_path,
               "platform":platform,
-              "map_cell_type_cache_dir":map_cell_type_cache_dir}
+              "map_cell_type_cache_dir":map_cell_type_cache_dir,
+              "map_cell_types":map_cell_types}
     
     # create a subprocess
-    p = ctx.Process(target=_worker_entry_10x, 
+    p = ctx.Process(target=_worker_entry_cluster, 
                     args=(kwargs, child_conn), 
                     daemon=False)
     
@@ -184,7 +186,7 @@ def run_stardist_pipeline_cell_cluser_and_annotation(*,
 
     if p.exitcode != 0 or status != "ok":
         raise RuntimeError(
-            f"Stardist stage-1 worker failed (exit {p.exitcode}):\n{payload}"
+            f"Stardist stage-2 worker failed (exit {p.exitcode}):\n{payload}"
         )
     if not Path(payload).exists():
         raise RuntimeError(f"worker reported {payload!r} but file does not exist")
@@ -196,14 +198,15 @@ def conduct_stardist_pipeline(*,
                               source_image_path:str,
                               chip_series:str,
                               gtf_path:str,
-                              map_cell_type_cache_dir:str,
                               output_dir:str,
                               platform:Literal["10x","stereo"],
                               scalefactor:float|None = None,
                               microns_per_pxl:float|None = None,
                               tissue_position_path:str|None = None,
                               save_label_image:bool=False,
-                              image_save_path:str|None = None):  # noqa: F821
+                              image_save_path:str|None = None,
+                              map_cell_type_cache_dir:str|None = None,
+                              map_cell_types:bool=True):  # noqa: F821
     """
     Conduct the Stardist pipeline for cell segmentation.
 
@@ -240,7 +243,8 @@ def conduct_stardist_pipeline(*,
                                                                       gtf_path=gtf_path,
                                                                       map_cell_type_cache_dir=map_cell_type_cache_dir,
                                                                       output_dir=output_dir,
-                                                                      platform=platform)
+                                                                      platform=platform,
+                                                                      map_cell_types=map_cell_types)
 
         return adata_path
     
@@ -259,6 +263,7 @@ def conduct_stardist_pipeline(*,
                                                                       gtf_path=gtf_path,
                                                                       map_cell_type_cache_dir=map_cell_type_cache_dir,
                                                                       output_dir=output_dir,
-                                                                      platform=platform)
+                                                                      platform=platform,
+                                                                      map_cell_types=map_cell_types)
 
         return adata_path

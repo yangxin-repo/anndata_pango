@@ -1,16 +1,12 @@
 
-from typing import TYPE_CHECKING
+from anndata import AnnData
 
-from .image_pango.image_pango import Image_Pango as Image_Pango
-from .anndata_pango import load_10x_h5_pango as load_10x_h5_pango
-from .anndata_pango import concat_pango
-
-from anndata import AnnData as _AnnData
-from .anndata_pango import Pango_Accessor as Pango_Accessor
+from .anndata_pango import Pango_Accessor, concat_pango, load_10x_h5_pango
+from .cli_stardist import conduct_stardist_pipeline
+from .image_pango.image_pango import Image_Pango
 
 # add class annotation
-if TYPE_CHECKING:
-    class AnnData(_AnnData):
-        pango: Pango_Accessor
+class AnnData(AnnData):
+    pango: Pango_Accessor
 
-__all__ = ["Pango_Accessor","Image_Pango","load_10x_h5_pango","concat_pango"]
+__all__ = ["Image_Pango", "Pango_Accessor", "concat_pango", "conduct_stardist_pipeline", "load_10x_h5_pango"]
